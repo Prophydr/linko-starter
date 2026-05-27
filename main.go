@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -26,28 +27,48 @@ func main() {
 	os.Exit(status)
 }
 
-func initializeLogger(logFile string) (*log.Logger, error) {
+type closeFunc func() error
+
+func initializeLogger(logFile string) (*log.Logger, closeFunc, error) {
+	noOp := func() error {
+		return nil
+	}
 	if logFile != "" {
 		file, err := os.OpenFile(logFile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 		if err != nil {
-			return nil, fmt.Errorf("failed to open log file: %w", err)
+			return nil, noOp, fmt.Errorf("failed to open log file: %w", err)
 		}
-		defer func(file *os.File) {
-			err := file.Close()
-			if err != nil {
-				log.Printf("failed to close log file: %v", err)
-			}
-		}(file)
 
-		multiWriter := io.MultiWriter(os.Stderr, file)
-		return log.New(multiWriter, "", log.LstdFlags), nil
+		bufferedFile := bufio.NewWriterSize(file, 8192)
+		bufferedFileClose := func() error {
+			err := bufferedFile.Flush()
+			if err != nil {
+				return err
+			}
+
+			err = file.Close()
+			if err != nil {
+				return err
+			}
+
+			return nil
+		}
+
+		multiWriter := io.MultiWriter(os.Stderr, bufferedFile)
+		return log.New(multiWriter, "", log.LstdFlags), bufferedFileClose, nil
 	}
-	return log.New(os.Stderr, "", log.LstdFlags), nil
+	return log.New(os.Stderr, "", log.LstdFlags), noOp, nil
 }
 
 func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir string) int {
 
-	logger, err := initializeLogger(os.Getenv("LINKO_LOG_FILE"))
+	logger, closeLogger, err := initializeLogger(os.Getenv("LINKO_LOG_FILE"))
+	defer func() {
+		if err := closeLogger(); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to close logger: %v\n", err)
+		}
+	}()
+
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize logger: %v\n", err)
 		return 1
@@ -66,7 +87,6 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 	<-ctx.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
 	logger.Printf("Linko is shutting down\n")
 	if err := s.shutdown(shutdownCtx); err != nil {
 		logger.Printf("failed to shutdown server: %v\n", err)
