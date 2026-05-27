@@ -48,6 +48,10 @@ func initializeLogger(logFile string) (*log.Logger, error) {
 func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir string) int {
 
 	logger, err := initializeLogger(os.Getenv("LINKO_LOG_FILE"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize logger: %v\n", err)
+		return 1
+	}
 	st, err := store.New(dataDir, logger)
 	if err != nil {
 		logger.Printf("failed to create store: %v\n", err)
