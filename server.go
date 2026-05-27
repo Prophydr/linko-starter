@@ -12,8 +12,6 @@ import (
 	"boot.dev/linko/internal/store"
 )
 
-//var logger = log.New(os.Stderr, "DEBUG: ", log.LstdFlags)
-
 func requestLogger(logger *log.Logger) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

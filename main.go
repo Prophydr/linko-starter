@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -24,21 +26,34 @@ func main() {
 	os.Exit(status)
 }
 
+func initializeLogger(logFile string) (*log.Logger, error) {
+	if logFile != "" {
+		file, err := os.OpenFile(logFile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open log file: %w", err)
+		}
+		defer func(file *os.File) {
+			err := file.Close()
+			if err != nil {
+				log.Printf("failed to close log file: %v", err)
+			}
+		}(file)
+
+		multiWriter := io.MultiWriter(os.Stderr, file)
+		return log.New(multiWriter, "", log.LstdFlags), nil
+	}
+	return log.New(os.Stderr, "", log.LstdFlags), nil
+}
+
 func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir string) int {
 
-	file, err := os.OpenFile("linko.access.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	logger, err := initializeLogger(os.Getenv("LINKO_LOG_FILE"))
+	st, err := store.New(dataDir, logger)
 	if err != nil {
-		log.Fatal(err)
-	}
-
-	access := log.New(file, "INFO: ", log.LstdFlags)
-	standard := log.New(os.Stderr, "DEBUG: ", log.LstdFlags)
-	st, err := store.New(dataDir, standard)
-	if err != nil {
-		standard.Printf("failed to create store: %v\n", err)
+		logger.Printf("failed to create store: %v\n", err)
 		return 1
 	}
-	s := newServer(*st, httpPort, cancel, access)
+	s := newServer(*st, httpPort, cancel, logger)
 	var serverErr error
 	go func() {
 		serverErr = s.start()
@@ -48,13 +63,13 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	standard.Printf("Linko is shutting down\n")
+	logger.Printf("Linko is shutting down\n")
 	if err := s.shutdown(shutdownCtx); err != nil {
-		standard.Printf("failed to shutdown server: %v\n", err)
+		logger.Printf("failed to shutdown server: %v\n", err)
 		return 1
 	}
 	if serverErr != nil {
-		standard.Printf("server error: %v\n", serverErr)
+		logger.Printf("server error: %v\n", serverErr)
 		return 1
 	}
 	return 0
