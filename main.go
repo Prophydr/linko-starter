@@ -5,7 +5,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -33,6 +32,10 @@ func initializeLogger(logFile string) (*slog.Logger, closeFunc, error) {
 	noOp := func() error {
 		return nil
 	}
+
+	debugSink := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})
 	if logFile != "" {
 		file, err := os.OpenFile(logFile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 		if err != nil {
@@ -54,11 +57,17 @@ func initializeLogger(logFile string) (*slog.Logger, closeFunc, error) {
 			return nil
 		}
 
-		multiWriter := io.MultiWriter(os.Stderr, bufferedFile)
+		infoHandler := slog.NewTextHandler(bufferedFile, &slog.HandlerOptions{
+			Level: slog.LevelInfo,
+		})
 
-		return slog.New(slog.NewTextHandler(multiWriter, nil)), bufferedFileClose, nil
+		return slog.New(slog.NewMultiHandler(
+			debugSink,
+			infoHandler,
+		)), bufferedFileClose, nil
 	}
-	return slog.New(slog.NewTextHandler(os.Stderr, nil)), noOp, nil
+
+	return slog.New(debugSink), noOp, nil
 }
 
 func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir string) int {
@@ -76,7 +85,7 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 	}
 	st, err := store.New(dataDir, logger)
 	if err != nil {
-		logger.Info(fmt.Sprintf("failed to create store: %v\n", err))
+		logger.Error(fmt.Sprintf("failed to create store: %v\n", err))
 		return 1
 	}
 	s := newServer(*st, httpPort, cancel, logger)
@@ -88,7 +97,7 @@ func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir s
 	<-ctx.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	logger.Info("Linko is shutting down\n")
+	logger.Debug("Linko is shutting down")
 	if err := s.shutdown(shutdownCtx); err != nil {
 		logger.Info(fmt.Sprintf("failed to shutdown server: %v\n", err))
 		return 1
