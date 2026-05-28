@@ -33,7 +33,7 @@ func initializeLogger(logFile string) (*slog.Logger, closeFunc, error) {
 		return nil
 	}
 
-	debugSink := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+	debugHandler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	})
 	if logFile != "" {
@@ -57,17 +57,17 @@ func initializeLogger(logFile string) (*slog.Logger, closeFunc, error) {
 			return nil
 		}
 
-		infoHandler := slog.NewTextHandler(bufferedFile, &slog.HandlerOptions{
+		infoHandler := slog.NewJSONHandler(bufferedFile, &slog.HandlerOptions{
 			Level: slog.LevelInfo,
 		})
 
 		return slog.New(slog.NewMultiHandler(
-			debugSink,
+			debugHandler,
 			infoHandler,
 		)), bufferedFileClose, nil
 	}
 
-	return slog.New(debugSink), noOp, nil
+	return slog.New(debugHandler), noOp, nil
 }
 
 func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir string) int {
