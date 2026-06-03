@@ -13,15 +13,24 @@ import (
 	"boot.dev/linko/internal/store"
 )
 
+const logContextKey contextKey = "log_context"
+
+type LogContext struct {
+	Username string
+}
+
 func requestLogger(logger *slog.Logger) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			logContext := &LogContext{}
+			r = r.WithContext(context.WithValue(r.Context(), logContextKey, logContext))
+
 			spyW := &spyResponseWriter{ResponseWriter: w}
 			spyR := &spyReadCloser{ReadCloser: r.Body}
 			r.Body = spyR
-			start := time.Now()
 			next.ServeHTTP(spyW, r)
-			logger.Info("Served request",
+			attrs := []any{
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.Path),
 				slog.String("client_ip", r.RemoteAddr),
@@ -29,6 +38,14 @@ func requestLogger(logger *slog.Logger) func(next http.Handler) http.Handler {
 				slog.Int("request_body_bytes", spyR.requestBodyBytes),
 				slog.Int("response_status", spyW.responseStatus),
 				slog.Int("response_body_bytes", spyW.responseBodyBytes),
+			}
+
+			if logContext.Username != "" {
+				attrs = append(attrs, slog.String("user", logContext.Username))
+			}
+
+			logger.Info("Served request",
+				attrs...,
 			)
 		})
 	}
