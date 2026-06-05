@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -18,6 +17,7 @@ import (
 	"github.com/lmittmann/tint"
 	"github.com/mattn/go-isatty"
 	pkgerr "github.com/pkg/errors"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 type stackTracer interface {
@@ -79,59 +79,45 @@ func errorAttrs(err error) []slog.Attr {
 type closeFunc func() error
 
 func initializeLogger(logFile string) (*slog.Logger, closeFunc, error) {
-	noOp := func() error {
-		return nil
+	handlers := []slog.Handler{
+		tint.NewHandler(os.Stderr, &tint.Options{
+			Level:       slog.LevelDebug,
+			ReplaceAttr: replaceAttr,
+			NoColor:     !(isatty.IsTerminal(os.Stderr.Fd()) || isatty.IsCygwinTerminal(os.Stderr.Fd())),
+		}),
 	}
+	closers := []closeFunc{}
 
-	noColor := false
-
-	if isatty.IsTerminal(os.Stdout.Fd()) {
-		noColor = false
-	} else if isatty.IsCygwinTerminal(os.Stdout.Fd()) {
-		noColor = false
-	} else {
-		noColor = true
-		fmt.Printf("not a terminal, using color: %t\n", noColor)
-	}
-
-	debugHandler := tint.NewHandler(os.Stderr, &tint.Options{
-		Level:       slog.LevelDebug,
-		ReplaceAttr: replaceAttr,
-		NoColor:     noColor,
-	})
 	if logFile != "" {
-		file, err := os.OpenFile(logFile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
-		if err != nil {
-			return nil, noOp, fmt.Errorf("failed to open log file: %w", err)
+		rotatingFile := &lumberjack.Logger{
+			Filename:   logFile,
+			MaxSize:    1,
+			MaxAge:     28,
+			MaxBackups: 10,
+			LocalTime:  false,
+			Compress:   true,
 		}
-
-		bufferedFile := bufio.NewWriterSize(file, 8192)
-		bufferedFileClose := func() error {
-			err := bufferedFile.Flush()
-			if err != nil {
-				return err
-			}
-
-			err = file.Close()
-			if err != nil {
-				return err
-			}
-
-			return nil
-		}
-
-		infoHandler := slog.NewJSONHandler(bufferedFile, &slog.HandlerOptions{
+		handlers = append(handlers, slog.NewJSONHandler(rotatingFile, &slog.HandlerOptions{
 			Level:       slog.LevelInfo,
 			ReplaceAttr: replaceAttr,
+		}))
+		closers = append(closers, func() error {
+			if err := rotatingFile.Close(); err != nil {
+				return fmt.Errorf("failed to close log file: %w", err)
+			}
+			return nil
 		})
-
-		return slog.New(slog.NewMultiHandler(
-			debugHandler,
-			infoHandler,
-		)), bufferedFileClose, nil
 	}
-
-	return slog.New(debugHandler), noOp, nil
+	closer := func() error {
+		var errs []error
+		for _, close := range closers {
+			if err := close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		return errors.Join(errs...)
+	}
+	return slog.New(slog.NewMultiHandler(handlers...)), closer, nil
 }
 
 func run(ctx context.Context, cancel context.CancelFunc, httpPort int, dataDir string) int {
