@@ -51,7 +51,7 @@ func requestLogger(logger *slog.Logger) func(next http.Handler) http.Handler {
 			attrs := []slog.Attr{
 				slog.String("method", r.Method),
 				slog.String("path", r.URL.Path),
-				slog.String("client_ip", r.RemoteAddr),
+				slog.String("client_ip", redactIP(r.RemoteAddr)),
 				slog.Duration("duration", time.Since(start)),
 				slog.Int("request_body_bytes", spyR.requestBodyBytes),
 				slog.Int("response_status", spyW.responseStatus),
@@ -70,6 +70,24 @@ func requestLogger(logger *slog.Logger) func(next http.Handler) http.Handler {
 			logger.LogAttrs(r.Context(), slog.LevelInfo, "Served request", attrs...)
 		})
 	}
+}
+
+func redactIP(ipAddr string) string {
+
+	host, _, err := net.SplitHostPort(ipAddr)
+	if err != nil {
+		host = ipAddr
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return ipAddr
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		return fmt.Sprintf("%d.%d.%d.x", ip4[0], ip4[1], ip4[2])
+	}
+
+	return ip.String()
 }
 
 type server struct {
